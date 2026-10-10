@@ -1,17 +1,56 @@
-name: build-ios
-on: workflow_dispatch
+name: Build Muguet IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_id:
+        description: "Bundle identifier (use your own, e.g. com.yourname.muguet)"
+        required: true
+        default: "com.yourname.muguet"
+      game_wasm_url:
+        description: "URL of game.wasm, or of a .zip containing b/<build>/game.wasm"
+        required: true
+        default: "https://github.com/alihammoud21/playgta5/releases/download/full-game-v1/playgta5-part-01-of-14.zip"
+      game_wasm_sha256:
+        description: "Expected SHA-256 of the extracted game.wasm (integrity check)"
+        required: true
+        default: "11ca8d2c04c5e843d18ff4aea4899d72c86973c6b031df334e67c446b2ae83e0"
+
 jobs:
-  build:
+  ipa:
     runs-on: macos-26
-    timeout-minutes: 120
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - run: brew install xcodegen
-      - run: |
-          rustup toolchain install 1.98.1
+      - name: Install xcodegen
+        run: brew install xcodegen
+      - name: Install Rust 1.98.1 + aarch64-apple-ios target
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal
           rustup target add aarch64-apple-ios --toolchain 1.98.1
-      - run: BUNDLE_ID=com.kestrel4829.muguet ./make-ios.sh --ipa
+      - name: Fetch and verify game.wasm
+        run: |
+          set -euo pipefail
+          mkdir -p .game
+          URL="${{ inputs.game_wasm_url }}"
+          case "$URL" in
+            *.zip)
+              curl -fL --retry 5 --retry-all-errors -o .game/part.zip "$URL"
+              unzip -j -o .game/part.zip '*/b/*/game.wasm' -d .game
+              rm -f .game/part.zip ;;
+            *)
+              curl -fL --retry 5 --retry-all-errors -o .game/game.wasm "$URL" ;;
+          esac
+          test -s .game/game.wasm
+          echo "${{ inputs.game_wasm_sha256 }}  .game/game.wasm" | shasum -a 256 -c -
+      - name: Build Muguet.ipa
+        env:
+          BUNDLE_ID: ${{ inputs.bundle_id }}
+        run: |
+          chmod +x ./make-ios.sh
+          ./make-ios.sh .game/game.wasm --ipa
       - uses: actions/upload-artifact@v4
         with:
-          name: Muguet
+          name: Muguet-ipa
           path: build/Muguet.ipa
+          if-no-files-found: error
